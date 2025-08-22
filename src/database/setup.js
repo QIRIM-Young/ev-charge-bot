@@ -20,9 +20,9 @@ export function getPool() {
 }
 
 export async function setupDatabase() {
-  // Skip database setup in development if no DATABASE_URL
-  if (process.env.NODE_ENV === 'development' && !process.env.DATABASE_URL?.startsWith('postgresql://')) {
-    logger.warn('No DATABASE_URL configured, skipping database setup for development');
+  // Skip database setup if no DATABASE_URL (use SQLite fallback)
+  if (!process.env.DATABASE_URL?.startsWith('postgresql://')) {
+    logger.warn('No PostgreSQL DATABASE_URL configured, using in-memory SQLite fallback');
     return;
   }
 

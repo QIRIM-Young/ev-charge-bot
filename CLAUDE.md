@@ -10,7 +10,7 @@
 
 ### 🤖 Bot Details
 - **Telegram**: `@ev_charge_tracker_bot`
-- **Token**: `7474516072:AAGEwY_Q2CVFL09u6Hb5YEe6Ny3WlVsXnbo`
+- **Token**: `8499449869:AAHHUCMAZzSdJF58IQkPEcAX47g9wGbwY_c`
 - **GitHub**: https://github.com/QIRIM-Young/ev-charge-bot
 
 ## 🏗️ Technical Architecture
@@ -96,7 +96,7 @@ started → before_photo_uploaded → finished → completed
 ### Environment Configuration
 ```env
 # Bot Configuration  
-BOT_TOKEN=7474516072:AAGEwY_Q2CVFL09u6Hb5YEe6Ny3WlVsXnbo
+BOT_TOKEN=8499449869:AAHHUCMAZzSdJF58IQkPEcAX47g9wGbwY_c
 OWNER_CHAT_ID=495068248
 OWNER_PHONE_E164=+380933652536
 

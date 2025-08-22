@@ -4,6 +4,10 @@ import { logger } from '../utils/logger.js';
 import { getSessionsForMonth, getMonthlyStats } from './sessiondb.js';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Generate monthly report in PDF format
 export async function generateMonthlyPDF(ownerId, yearMonth) {
@@ -11,8 +15,17 @@ export async function generateMonthlyPDF(ownerId, yearMonth) {
     const sessions = await getSessionsForMonth(ownerId, yearMonth);
     const stats = await getMonthlyStats(ownerId, yearMonth);
     
-    // Create PDF document
+    // Create PDF document with Cyrillic font support
     const doc = new PDFDocument({ margin: 50 });
+    
+    // Register Noto Sans font for Cyrillic support
+    const fontPath = path.join(__dirname, '../../assets/fonts/NotoSans-Regular.ttf');
+    if (fs.existsSync(fontPath)) {
+      doc.registerFont('NotoSans', fontPath);
+      doc.font('NotoSans');
+    } else {
+      logger.warn('Noto Sans font not found, using default font (may not display Cyrillic correctly)');
+    }
     
     // Title
     doc.fontSize(20)

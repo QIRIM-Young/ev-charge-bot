@@ -8,8 +8,15 @@ export function isOwner(userId, username) {
   
   logger.info(`Auth check: user ${userId} vs owner ${ownerChatId}`);
   
+  // Main owner
   if (ownerChatId && userId.toString() === ownerChatId) {
     logger.info(`Owner recognized by chat_id: ${userId}`);
+    return true;
+  }
+  
+  // Test bot (temporary for testing)
+  if (userId.toString() === '8476511612') {
+    logger.info(`Test bot recognized as owner: ${userId}`);
     return true;
   }
   

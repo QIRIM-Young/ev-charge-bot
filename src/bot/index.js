@@ -33,6 +33,10 @@ export function initBot(bot) {
   bot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
     const username = ctx.from?.username;
+    const chatType = ctx.chat?.type;
+    const isBot = ctx.from?.is_bot;
+    
+    logger.info(`Message details: userId=${userId}, username=${username}, chatType=${chatType}, isBot=${isBot}, text="${ctx.message?.text?.substring(0, 50) || '[non-text]'}"`);
     
     if (!userId) {
       logger.warn('Message from unknown user');

@@ -38,15 +38,15 @@
 ### 1. Налаштування
 ```bash
 # Клонувати репозиторій
-git clone <repo-url>
+git clone https://github.com/QIRIM-Young/ev-charge-bot.git
 cd ev-charge-bot
 
 # Встановити залежності
 npm install
 
 # Налаштувати environment
-cp .env.example .env
-# Відредагувати .env файл
+# Скопіювати з прикладу в SETUP.md або використати готовий .env
+# Відредагувати .env файл з реальними значеннями
 ```
 
 ### 2. Розробка (локально)

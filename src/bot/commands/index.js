@@ -13,8 +13,10 @@ export function setupCommands(bot) {
   // Start command - available for everyone
   bot.command('start', async (ctx) => {
     const userName = ctx.from.first_name || ctx.from.username || 'Користувач';
+    logger.info(`/start command: isOwner=${ctx.isOwner}, userName=${userName}`);
     
     if (ctx.isOwner) {
+      logger.info('Sending owner start message...');
       await ctx.reply(
         `Привіт, ${userName}! 👋\n\n` +
         'Ви увійшли як власник. Доступні команди:\n\n' +
@@ -36,6 +38,7 @@ export function setupCommands(bot) {
           }
         }
       );
+      logger.info('Owner start message sent successfully');
     } else if (ctx.userRole === 'NEIGHBOR') {
       await ctx.reply(
         `Привіт, ${userName}! 👋\n\n` +
