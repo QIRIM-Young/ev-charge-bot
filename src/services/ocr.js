@@ -1,9 +1,30 @@
 import { createWorker } from 'tesseract.js';
-import tesseract from 'node-tesseract-ocr';
+import { ComputerVisionClient } from '@azure/cognitiveservices-computervision';
+import { ApiKeyCredentials } from '@azure/ms-rest-js';
 import { logger } from '../utils/logger.js';
 import sharp from 'sharp';
 
 let worker = null;
+let azureVisionClient = null;
+
+// Initialize Azure Computer Vision client
+function initAzureVision() {
+  if (!azureVisionClient && process.env.AZURE_VISION_KEY && process.env.AZURE_VISION_ENDPOINT) {
+    try {
+      logger.info('Initializing Azure Computer Vision client...');
+      azureVisionClient = new ComputerVisionClient(
+        new ApiKeyCredentials({ inHeader: { 'Ocp-Apim-Subscription-Key': process.env.AZURE_VISION_KEY } }), 
+        process.env.AZURE_VISION_ENDPOINT
+      );
+      logger.info('Azure Computer Vision client initialized successfully');
+      return true;
+    } catch (error) {
+      logger.error('Failed to initialize Azure Vision client:', error);
+      return false;
+    }
+  }
+  return !!azureVisionClient;
+}
 
 // Initialize Tesseract worker
 async function initOCR() {
@@ -20,36 +41,126 @@ async function initOCR() {
   return worker;
 }
 
-// Enhanced OCR for utility meters with number-only recognition
+// Enhanced OCR for utility meters with Azure AI and Tesseract fallback
 export async function processUtilityMeterOCR(imageBuffer, options = {}) {
   try {
     logger.info('Starting utility meter OCR processing...');
     
-    // Convert HEIC/HEIF to JPG using Sharp with enhanced preprocessing for meters
-    let processedBuffer = imageBuffer;
-    try {
-      logger.info('Converting image format for OCR compatibility...');
-      processedBuffer = await sharp(imageBuffer)
-        .jpeg({ quality: 95 })
-        .grayscale() // Convert to grayscale for better contrast
-        .normalize() // Normalize contrast
-        .sharpen() // Sharpen for better digit recognition
-        .toBuffer();
-      logger.info('Image converted and enhanced successfully');
-    } catch (conversionError) {
-      logger.warn('Image conversion failed, trying original:', conversionError.message);
+    // Try Azure Computer Vision first if available
+    if (initAzureVision()) {
+      try {
+        logger.info('Using Azure Computer Vision OCR for enhanced accuracy...');
+        const azureResult = await processAzureVisionOCR(imageBuffer, options);
+        if (azureResult.success && azureResult.reading) {
+          logger.info(`Azure OCR successful: ${azureResult.reading}`);
+          return azureResult;
+        }
+        logger.warn('Azure OCR did not return valid reading, falling back to Tesseract...');
+      } catch (azureError) {
+        logger.error('Azure OCR failed:', azureError.message);
+        logger.info('Falling back to Tesseract OCR...');
+      }
+    } else {
+      logger.info('Azure Computer Vision not configured, using Tesseract OCR...');
     }
-    
-    // DISABLED: node-tesseract-ocr causes crashes - fallback immediately to tesseract.js
-    logger.warn('node-tesseract-ocr disabled due to stability issues, using enhanced tesseract.js');
-    throw new Error('node-tesseract-ocr disabled - using fallback');
-    
-  } catch (error) {
-    logger.error('Utility meter OCR processing failed:', error);
     
     // Enhanced Tesseract.js fallback with number-focused configuration
     logger.info('Using enhanced Tesseract.js OCR with number focus...');
     return processImageOCREnhanced(imageBuffer, options);
+    
+  } catch (error) {
+    logger.error('Utility meter OCR processing failed:', error);
+    return {
+      success: false,
+      error: error.message,
+      reading: null,
+      method: 'ocr-failed'
+    };
+  }
+}
+
+// Process OCR using Azure Computer Vision
+async function processAzureVisionOCR(imageBuffer, options = {}) {
+  try {
+    if (!azureVisionClient) {
+      throw new Error('Azure Vision client not initialized');
+    }
+    
+    logger.info('Starting Azure Computer Vision OCR...');
+    
+    // Convert image to base64 data URL for Azure API
+    const base64Image = imageBuffer.toString('base64');
+    const imageStream = Buffer.from(base64Image, 'base64');
+    
+    // Use Read API for better accuracy on printed text
+    const readResult = await azureVisionClient.readInStream(imageStream);
+    const operationId = readResult.operationLocation.split('/').slice(-1)[0];
+    
+    // Wait for the read operation to complete
+    let result;
+    let status = 'running';
+    let attempts = 0;
+    const maxAttempts = 10;
+    
+    while (status === 'running' || status === 'notStarted') {
+      if (attempts >= maxAttempts) {
+        throw new Error('Azure OCR timeout - operation took too long');
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      result = await azureVisionClient.getReadResult(operationId);
+      status = result.status;
+      attempts++;
+      logger.info(`Azure OCR status: ${status} (attempt ${attempts})`);
+    }
+    
+    if (status === 'failed') {
+      throw new Error('Azure OCR operation failed');
+    }
+    
+    // Extract text from results
+    let fullText = '';
+    let confidence = 0;
+    let wordCount = 0;
+    
+    if (result.analyzeResult && result.analyzeResult.readResults) {
+      for (const page of result.analyzeResult.readResults) {
+        for (const line of page.lines) {
+          fullText += line.text + ' ';
+          // Calculate average confidence from words
+          for (const word of line.words) {
+            confidence += word.confidence;
+            wordCount++;
+          }
+        }
+      }
+    }
+    
+    const avgConfidence = wordCount > 0 ? (confidence / wordCount) * 100 : 0;
+    
+    logger.info(`Azure OCR completed. Average confidence: ${avgConfidence.toFixed(1)}%`);
+    logger.info(`Azure OCR raw text: ${fullText.trim()}`);
+    
+    // Extract meter reading using the same logic as Tesseract
+    const reading = extractMeterReading(fullText.trim(), options.context);
+    
+    return {
+      success: true,
+      rawText: fullText.trim(),
+      confidence: avgConfidence,
+      reading: reading,
+      method: 'azure-computer-vision',
+      operationId: operationId
+    };
+    
+  } catch (error) {
+    logger.error('Azure Computer Vision OCR failed:', error);
+    return {
+      success: false,
+      error: error.message,
+      reading: null,
+      method: 'azure-computer-vision-failed'
+    };
   }
 }
 
