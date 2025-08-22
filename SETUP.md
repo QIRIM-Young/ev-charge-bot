@@ -29,7 +29,8 @@ confirm - Підтвердити звіт (для сусідів)
 - **Azure App Service** (для бота)
 - **Azure Database for PostgreSQL Flexible Server**
 - **Azure Blob Storage** (для фото)
-- **Azure Key Vault** (для секретів)
+- **Azure Computer Vision** (для OCR)
+- **Azure Key Vault** (для секретів - опціонально)
 
 ### Створення через Azure CLI:
 ```bash
@@ -53,6 +54,14 @@ az storage account create \\
   --resource-group ev-charge-bot-rg \\
   --location "Poland Central" \\
   --sku Standard_LRS
+
+# Створити Computer Vision для OCR
+az cognitiveservices account create \\
+  --name "ev-charge-vision" \\
+  --resource-group "ev-charge-bot-rg" \\
+  --kind "ComputerVision" \\
+  --sku "F0" \\
+  --location "East US"
 
 # Створити container для фото
 az storage container create \\
@@ -93,6 +102,10 @@ DB_SSL=true
 AZURE_STORAGE_ACCOUNT_NAME=evchargestorage
 AZURE_STORAGE_ACCOUNT_KEY=ваш_storage_key
 AZURE_STORAGE_CONTAINER_NAME=ev-charging
+
+# Azure Computer Vision OCR
+AZURE_VISION_KEY=ваш_computer_vision_key
+AZURE_VISION_ENDPOINT=https://eastus.api.cognitive.microsoft.com/
 
 # Owner Configuration (Ельдар)
 OWNER_PHONE_E164=+380933652536
@@ -166,8 +179,9 @@ curl -X POST "https://api.telegram.org/bot<ваш_token>/setWebhook" \\
 ## Orієнтовна вартість
 
 - **App Service B1**: ~$13/місяць
-- **PostgreSQL Basic**: ~$20/місяць  
+- **PostgreSQL Flexible B1ms**: ~$20/місяць  
 - **Blob Storage**: ~$2/місяць
+- **Computer Vision F0**: Безкоштовно (5000 API calls/місяць)
 - **Загалом**: ~$35/місяць = $420/рік
 
 Це вкладається в ваш бюджет $2000/рік з великим запасом!

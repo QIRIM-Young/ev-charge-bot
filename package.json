@@ -1,7 +1,7 @@
 {
   "name": "ev-charge-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for EV charging tracking with Azure backend",
+  "description": "🔋 Telegram bot for EV charging tracking with Azure AI OCR - Бот для відстеження витрат на зарядку електромобіля",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
@@ -35,10 +35,27 @@
     "telegram",
     "bot",
     "ev",
+    "electric-vehicle",
     "charging",
     "azure",
-    "ukraine"
+    "computer-vision",
+    "ocr",
+    "ukraine",
+    "postgresql",
+    "tesseract",
+    "grammy"
   ],
-  "author": "Eldar & Vita",
-  "license": "MIT"
+  "author": "Eldar & Vita (with Claude Code)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/QIRIM-Young/ev-charge-bot.git"
+  },
+  "homepage": "https://github.com/QIRIM-Young/ev-charge-bot#readme",
+  "bugs": {
+    "url": "https://github.com/QIRIM-Young/ev-charge-bot/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
