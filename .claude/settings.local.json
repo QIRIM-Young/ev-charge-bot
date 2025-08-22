@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(az account show:*)",
+      "WebSearch",
+      "Bash(npm run test-config:*)",
+      "Bash(az login:*)",
+      "Bash(az webapp up:*)",
+      "Bash(az webapp list-runtimes:*)",
+      "Bash(az provider register:*)",
+      "Bash(az provider show:*)",
+      "Bash(az webapp show:*)",
+      "Bash(az webapp config appsettings set:*)",
+      "Bash(az webapp log tail:*)",
+      "Bash(az webapp config appsettings list:*)",
+      "Bash(az webapp restart:*)",
+      "Bash(az webapp config set:*)",
+      "Bash(az postgres flexible-server create:*)",
+      "Bash(curl:*)",
+      "Bash(tasklist:*)",
+      "Bash(npm run dev:*)",
+      "Bash(az postgres flexible-server show:*)",
+      "Bash(npm install:*)",
+      "Bash(node:*)",
+      "Bash(az group:*)",
+      "Bash(az resource list:*)",
+      "Bash(az postgres flexible-server list:*)",
+      "Bash(az postgres flexible-server update:*)",
+      "Bash(az postgres flexible-server firewall-rule create:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": [],
+    "ask": [],
+    "additionalDirectories": [
+      "C:\\Users\\vlift\\OneDrive - QIRI''''M YOUNG\\Documents\\GitHub"
+    ]
+  }
+}
