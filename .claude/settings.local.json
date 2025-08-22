@@ -29,7 +29,13 @@
       "Bash(az postgres flexible-server update:*)",
       "Bash(az postgres flexible-server firewall-rule create:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(az webapp deployment source config-local-git:*)",
+      "Bash(az webapp deployment user set:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(az webapp log download:*)",
+      "Bash(rm:*)"
     ],
     "deny": [],
     "ask": [],

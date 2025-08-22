@@ -117,3 +117,11 @@ temp/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Test and generated files
+test-*.pdf
+test-*.png  
+test-*.jpg
+*.zip
+2025-*.txt
+azure-logs.zip
