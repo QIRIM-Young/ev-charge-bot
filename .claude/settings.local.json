@@ -62,7 +62,11 @@
       "Bash(timeout:*)",
       "Bash(ping:*)",
       "Bash(az vm show:*)",
-      "Bash(az webapp list:*)"
+      "Bash(az webapp list:*)",
+      "Bash(cat:*)",
+      "Bash(nslookup:*)",
+      "Bash(PORT=3001 npm run dev)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": [],
