@@ -1,4 +1,5 @@
 import { getPool } from '../database/setup.js';
+import { getSQLiteDB, setupSQLite } from '../database/sqlite.js';
 import { logger } from '../utils/logger.js';
 
 // Session states - keep consistent with in-memory version
@@ -21,8 +22,41 @@ const STATE_TO_STATUS = {
 
 // Check if should use database
 function shouldUseDatabase() {
-  // Only use database if explicitly in production AND we have a database URL
-  return process.env.NODE_ENV === 'production' && process.env.DATABASE_URL?.startsWith('postgresql://');
+  // Always use database in production, development uses PostgreSQL if configured
+  return process.env.NODE_ENV === 'production' || 
+         (process.env.DATABASE_URL && (
+           process.env.DATABASE_URL.startsWith('postgresql://') || 
+           process.env.DATABASE_URL.startsWith('file:')
+         ));
+}
+
+// Check if using SQLite vs PostgreSQL
+function isUsingSQLite() {
+  // Use SQLite in production by default, or when explicitly configured with file:
+  return process.env.NODE_ENV === 'production' || 
+         process.env.DATABASE_URL?.startsWith('file:');
+}
+
+// Get appropriate database connection
+function getDB() {
+  if (isUsingSQLite()) {
+    return getSQLiteDB();
+  } else {
+    return getPool();
+  }
+}
+
+// Setup database (PostgreSQL or SQLite)
+export async function initializeDatabase() {
+  if (!shouldUseDatabase()) {
+    return;
+  }
+  
+  if (isUsingSQLite()) {
+    await setupSQLite();
+  } else {
+    // PostgreSQL setup is handled in database/setup.js
+  }
 }
 
 // Create new charging session in database
@@ -34,19 +68,35 @@ export async function createSession(ownerId) {
     return memCreateSession(ownerId);
   }
 
-  const pool = getPool();
+  const db = getDB();
   
   try {
-    const result = await pool.query(
-      `INSERT INTO sessions (owner_user_id, started_at, status) 
-       VALUES ($1, NOW(), 'draft') 
-       RETURNING *`,
-      [ownerId]
-    );
-    
-    const session = dbRowToSession(result.rows[0]);
-    logger.info(`Database session created: ${session.id} for user ${ownerId}`);
-    return session;
+    if (isUsingSQLite()) {
+      const stmt = db.prepare(`
+        INSERT INTO sessions (owner_user_id, started_at, status) 
+        VALUES (?, datetime('now'), 'draft')
+      `);
+      const result = stmt.run(ownerId);
+      
+      // Get the created session
+      const getStmt = db.prepare('SELECT * FROM sessions WHERE id = ?');
+      const row = getStmt.get(result.lastInsertRowid);
+      
+      const session = dbRowToSession(row);
+      logger.info(`SQLite session created: ${session.id} for user ${ownerId}`);
+      return session;
+    } else {
+      const result = await db.query(
+        `INSERT INTO sessions (owner_user_id, started_at, status) 
+         VALUES ($1, NOW(), 'draft') 
+         RETURNING *`,
+        [ownerId]
+      );
+      
+      const session = dbRowToSession(result.rows[0]);
+      logger.info(`PostgreSQL session created: ${session.id} for user ${ownerId}`);
+      return session;
+    }
     
   } catch (error) {
     logger.error('Error creating session in database:', error);
@@ -112,65 +162,132 @@ export async function updateSession(sessionId, updates) {
     return memUpdateSession(sessionId, updates);
   }
 
-  const pool = getPool();
+  const db = getDB();
   
   try {
-    // Build dynamic update query
-    const setClause = [];
-    const values = [];
-    let paramIndex = 1;
-    
-    // Map state to database status if needed
-    if (updates.state) {
-      updates.status = STATE_TO_STATUS[updates.state] || 'draft';
-    }
-    
-    // Map session properties to database columns
-    const fieldMapping = {
-      finishedAt: 'finished_at',
-      meterBefore: 'meter_before',
-      meterAfter: 'meter_after',
-      kwhCalculated: 'kwh_calc',
-      kwhScreen: 'kwh_screen',
-      kwhAgreed: 'kwh_agreed',
-      tariffValue: 'tariff_value',
-      amountUah: 'amount_uah',
-      status: 'status'
-    };
-    
-    for (const [key, value] of Object.entries(updates)) {
-      if (key === 'state') continue; // Skip state as it's mapped to status
+    if (isUsingSQLite()) {
+      // SQLite implementation
+      const setClause = [];
+      const values = [];
       
-      const dbField = fieldMapping[key] || key;
-      setClause.push(`${dbField} = $${paramIndex}`);
-      values.push(value);
-      paramIndex++;
+      // Map state to database status if needed
+      if (updates.state) {
+        updates.status = STATE_TO_STATUS[updates.state] || 'draft';
+      }
+      
+      // Map session properties to database columns
+      const fieldMapping = {
+        finishedAt: 'finished_at',
+        meterBefore: 'meter_before', 
+        meterAfter: 'meter_after',
+        kwhCalculated: 'kwh_calc',
+        kwhScreen: 'kwh_screen',
+        kwhAgreed: 'kwh_agreed',
+        tariffValue: 'tariff_value',
+        amountUah: 'amount_uah',
+        status: 'status'
+      };
+      
+      for (const [key, value] of Object.entries(updates)) {
+        if (key === 'state') continue; // Skip state as it's mapped to status
+        
+        const dbField = fieldMapping[key] || key;
+        setClause.push(`${dbField} = ?`);
+        values.push(value);
+      }
+      
+      if (setClause.length === 0) {
+        throw new Error('No valid fields to update');
+      }
+      
+      // Always update updated_at
+      setClause.push(`updated_at = datetime('now')`);
+      values.push(sessionId);
+      
+      const updateQuery = `
+        UPDATE sessions 
+        SET ${setClause.join(', ')}
+        WHERE id = ?
+      `;
+      
+      const updateStmt = db.prepare(updateQuery);
+      const updateResult = updateStmt.run(...values);
+      
+      if (updateResult.changes === 0) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+      
+      // Get the updated session
+      const selectStmt = db.prepare('SELECT * FROM sessions WHERE id = ?');
+      const row = selectStmt.get(sessionId);
+      
+      if (!row) {
+        throw new Error(`Session ${sessionId} not found after update`);
+      }
+      
+      const session = dbRowToSession(row);
+      logger.info(`SQLite session updated: ${sessionId}`, updates);
+      return session;
+      
+    } else {
+      // PostgreSQL implementation
+      const pool = getPool();
+      const setClause = [];
+      const values = [];
+      let paramIndex = 1;
+      
+      // Map state to database status if needed
+      if (updates.state) {
+        updates.status = STATE_TO_STATUS[updates.state] || 'draft';
+      }
+    
+      // Map session properties to database columns
+      const fieldMapping = {
+        finishedAt: 'finished_at',
+        meterBefore: 'meter_before',
+        meterAfter: 'meter_after',
+        kwhCalculated: 'kwh_calc',
+        kwhScreen: 'kwh_screen',
+        kwhAgreed: 'kwh_agreed',
+        tariffValue: 'tariff_value',
+        amountUah: 'amount_uah',
+        status: 'status'
+      };
+      
+      for (const [key, value] of Object.entries(updates)) {
+        if (key === 'state') continue; // Skip state as it's mapped to status
+        
+        const dbField = fieldMapping[key] || key;
+        setClause.push(`${dbField} = $${paramIndex}`);
+        values.push(value);
+        paramIndex++;
+      }
+      
+      if (setClause.length === 0) {
+        throw new Error('No valid fields to update');
+      }
+      
+      // Always update updated_at
+      setClause.push(`updated_at = NOW()`);
+      values.push(sessionId);
+      
+      const query = `
+        UPDATE sessions 
+        SET ${setClause.join(', ')}
+        WHERE id = $${paramIndex}
+        RETURNING *
+      `;
+      
+      const result = await pool.query(query, values);
+      
+      if (result.rows.length === 0) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+      
+      const session = dbRowToSession(result.rows[0]);
+      logger.info(`Database session updated: ${sessionId}`, updates);
+      return session;
     }
-    
-    if (setClause.length === 0) {
-      throw new Error('No valid fields to update');
-    }
-    
-    // Always update updated_at
-    setClause.push(`updated_at = NOW()`);
-    values.push(sessionId);
-    
-    const query = `
-      UPDATE sessions 
-      SET ${setClause.join(', ')}
-      WHERE id = $${paramIndex}
-      RETURNING *
-    `;
-    
-    const result = await pool.query(query, values);
-    
-    if (result.rows.length === 0) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-    
-    const session = dbRowToSession(result.rows[0]);
-    logger.info(`Database session updated: ${sessionId}`, updates);
-    return session;
     
   } catch (error) {
     logger.error('Error updating session in database:', error);
@@ -363,18 +480,30 @@ export async function getUserSessions(ownerId, limit = 10) {
     return memGetUserSessions(ownerId, limit);
   }
 
-  const pool = getPool();
+  const db = getDB();
   
   try {
-    const result = await pool.query(
-      `SELECT * FROM sessions 
-       WHERE owner_user_id = $1 
-       ORDER BY created_at DESC 
-       LIMIT $2`,
-      [ownerId, limit]
-    );
-    
-    return result.rows.map(dbRowToSession);
+    if (isUsingSQLite()) {
+      // SQLite implementation
+      const stmt = db.prepare(`
+        SELECT * FROM sessions 
+        WHERE owner_user_id = ? 
+        ORDER BY created_at DESC 
+        LIMIT ?
+      `);
+      const rows = stmt.all(ownerId, limit);
+      return rows.map(dbRowToSession);
+    } else {
+      // PostgreSQL implementation
+      const result = await db.query(
+        `SELECT * FROM sessions 
+         WHERE owner_user_id = $1 
+         ORDER BY created_at DESC 
+         LIMIT $2`,
+        [ownerId, limit]
+      );
+      return result.rows.map(dbRowToSession);
+    }
     
   } catch (error) {
     logger.error('Error getting user sessions from database:', error);

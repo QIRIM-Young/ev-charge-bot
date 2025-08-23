@@ -10,23 +10,17 @@ export function initBot(bot) {
   bot.use(async (ctx, next) => {
     const start = Date.now();
     
-    // Log user info for debugging
-    logger.info(`User: ${ctx.from?.id} (@${ctx.from?.username}) - ${ctx.message?.text || '[non-text]'}`);
-    
-    logger.debug(`Incoming: ${ctx.update.update_id}`, {
-      from: ctx.from?.username || ctx.from?.id,
-      message: ctx.message?.text || ctx.message?.photo ? '[photo]' : '[other]'
-    });
+    // Enhanced logging for debugging
+    logger.info(`📩 INCOMING MESSAGE: User ${ctx.from?.id} (@${ctx.from?.username}) - "${ctx.message?.text || '[non-text]'}"`);
+    logger.info(`📝 Update ID: ${ctx.update.update_id}, Message type: ${ctx.message?.photo ? 'photo' : ctx.message?.document ? 'document' : ctx.message?.text ? 'text' : 'other'}`);
     
     try {
       await next();
+      logger.info(`✅ Message processed successfully in ${Date.now() - start}ms`);
     } catch (error) {
       logger.error('Bot handler error:', error);
       await ctx.reply('Виникла помилка при обробці вашого запиту. Спробуйте ще раз.');
     }
-    
-    const duration = Date.now() - start;
-    logger.debug(`Processed in ${duration}ms`);
   });
 
   // Authorization middleware

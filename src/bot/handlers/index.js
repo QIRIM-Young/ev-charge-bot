@@ -2,6 +2,7 @@ import { logger } from '../../utils/logger.js';
 import { InputFile } from 'grammy';
 import { normalizePhone, isPhoneAllowed, addNeighbor } from '../../services/auth.js';
 import { processImageOCR, processUtilityMeterOCR } from '../../services/ocr.js';
+import { extractImageTimestamp, smartDetectPhotoType, validatePhotoWorkflow } from '../../utils/exif.js';
 import { 
   createSession, 
   getActiveSession, 
@@ -89,28 +90,11 @@ export function setupHandlers(bot) {
       return ctx.reply('❌ Будь ласка, надішліть зображення.');
     }
     
-    // Check for HEIC/HEIF format and warn user
+    // HEIC/HEIF format is now supported via Azure Computer Vision
+    let heicFormat = false;
     if (document.mime_type === 'image/heic' || document.mime_type === 'image/heif') {
-      await ctx.reply(
-        `📱 <b>HEIC формат виявлено</b>\n\n` +
-        `❌ На жаль, HEIC формат з iPhone поки що не підтримується для OCR.\n\n` +
-        `🔧 <b>Рішення:</b>\n` +
-        `• Надішліть фото як звичайне фото (не документ)\n` +
-        `• Або змініть формат камери iPhone на JPG\n` +
-        `• Або введіть показники вручну`,
-        {
-          parse_mode: 'HTML',
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✏️ Ввести вручну', callback_data: 'edit_reading' },
-                { text: '📸 Надіслати JPG фото', callback_data: 'resend_as_document' }
-              ]
-            ]
-          }
-        }
-      );
-      return;
+      heicFormat = true;
+      logger.info(`Processing HEIC format image: ${document.file_name}`);
     }
 
     await ctx.reply(
@@ -132,6 +116,16 @@ export function setupHandlers(bot) {
       const response = await fetch(fileUrl);
       const imageBuffer = await response.arrayBuffer();
       
+      // Extract timestamp from image for smart ordering
+      const imageBufferNode = Buffer.from(imageBuffer);
+      const timestampResult = await extractImageTimestamp(imageBufferNode, document.file_name);
+      
+      if (timestampResult.success) {
+        logger.info(`Photo timestamp extracted (${timestampResult.source}): ${timestampResult.timestamp.toLocaleString('uk-UA')}`);
+      } else {
+        logger.info('No timestamp found in photo, using session state for type detection');
+      }
+      
       // Get active session to determine photo type and choose appropriate OCR
       const activeSession = await getActiveSession(ctx.from.id);
       if (!activeSession) {
@@ -143,16 +137,26 @@ export function setupHandlers(bot) {
         return;
       }
       
-      // Determine photo type based on session state
+      // Smart photo type detection using EXIF timestamps
+      const existingPhotosWithTimestamps = activeSession.photos
+        .filter(p => p.timestamp)
+        .map(p => ({ timestamp: new Date(p.timestamp) }));
+      
+      const detectedPhotoType = timestampResult.success ? 
+        smartDetectPhotoType(activeSession, timestampResult.timestamp, existingPhotosWithTimestamps) :
+        (activeSession.state === SESSION_STATES.STARTED ? 'ДО' : 
+         !activeSession.meterAfter ? 'ПІСЛЯ' : 'ЕКРАН');
+      
+      logger.info(`Smart photo type detection: ${detectedPhotoType}`);
+      
+      // Determine OCR approach based on detected type
       let isUtilityMeter = false;
-      if (activeSession.state === SESSION_STATES.STARTED || 
-          (activeSession.state === SESSION_STATES.FINISHED && !activeSession.meterAfter)) {
-        isUtilityMeter = true; // This is likely a utility meter photo
+      if (detectedPhotoType === 'ДО' || detectedPhotoType === 'ПІСЛЯ') {
+        isUtilityMeter = true; // Utility meter photos need specialized OCR
       }
       
       // Choose appropriate OCR method with timeout
       let ocrResult;
-      const imageBufferNode = Buffer.from(imageBuffer);
       
       // Add timeout to prevent hanging
       const ocrTimeout = 30000; // 30 seconds timeout
@@ -193,22 +197,56 @@ export function setupHandlers(bot) {
       
       if (ocrResult.success && ocrResult.reading) {
 
-        // Add photo to session
-        await addPhotoToSession(activeSession.id, {
-          type: activeSession.state === SESSION_STATES.STARTED ? 'before' : 'after',
+        // Add photo to session with timestamp and detected type
+        const photoMetadata = {
+          type: detectedPhotoType === 'ДО' ? 'before' : 
+                detectedPhotoType === 'ПІСЛЯ' ? 'after' : 'screen',
           fileId: document.file_id,
           fileName: document.file_name || 'image',
           fileSize: document.file_size,
           mimeType: document.mime_type,
-          ocrResult: ocrResult
-        });
+          ocrResult: ocrResult,
+          detectedType: detectedPhotoType,
+          timestamp: timestampResult.success ? timestampResult.timestamp.toISOString() : null,
+          timestampSource: timestampResult.source
+        };
+        
+        await addPhotoToSession(activeSession.id, photoMetadata);
 
+        // Prepare chronology info if timestamp available
+        let chronologyInfo = '';
+        if (timestampResult.success) {
+          chronologyInfo = `\n📅 Час зйомки: ${timestampResult.timestamp.toLocaleString('uk-UA')} (${timestampResult.source})`;
+          
+          // Check workflow if we have multiple photos
+          const updatedSession = await getActiveSession(ctx.from.id);
+          if (updatedSession.photos.length > 1) {
+            const photosWithTimestamps = updatedSession.photos
+              .filter(p => p.timestamp)
+              .map(p => ({
+                timestamp: new Date(p.timestamp),
+                detectedType: p.detectedType || 'НЕВІДОМО'
+              }));
+            
+            if (photosWithTimestamps.length > 1) {
+              const sortedPhotos = photosWithTimestamps.sort((a, b) => a.timestamp - b.timestamp);
+              const actualOrder = sortedPhotos.map(p => p.detectedType).join(' → ');
+              chronologyInfo += `\n📊 Порядок фото: ${actualOrder}`;
+              
+              const workflow = validatePhotoWorkflow(sortedPhotos);
+              if (workflow.isValid) {
+                chronologyInfo += '\n✅ Хронологія відповідає робочому процесу';
+              }
+            }
+          }
+        }
+        
         await ctx.reply(
           `✅ <b>Розпізнавання завершено</b>\n\n` +
           `🆔 Сесія: #${activeSession.id}\n` +
-          `📸 Тип фото: ${activeSession.state === SESSION_STATES.STARTED ? 'ДО зарядки' : 'ПІСЛЯ зарядки'}\n` +
+          `📸 Тип фото: ${detectedPhotoType} (${timestampResult.success ? 'авто-визначено' : 'за станом сесії'})\n` +
           `🔢 Розпізнані показники: <b>${ocrResult.reading}</b> кВт·год\n` +
-          `📊 Впевненість: ${ocrResult.confidence}%\n\n` +
+          `📊 Впевненість: ${ocrResult.confidence}%${chronologyInfo}\n\n` +
           'Чи правильно розпізнано показники?',
           {
             parse_mode: 'HTML',

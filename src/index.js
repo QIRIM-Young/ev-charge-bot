@@ -47,7 +47,18 @@ async function init() {
     } else {
       // Development: use polling
       logger.info('Development mode: Starting bot with polling...');
-      bot.start();
+      
+      // Add error handling and debugging for polling
+      bot.catch((err) => {
+        logger.error('Bot polling error:', err);
+      });
+      
+      // Start polling with explicit configuration
+      await bot.start({
+        onStart: (botInfo) => {
+          logger.info(`🤖 Bot started successfully: @${botInfo.username} (${botInfo.first_name})`);
+        }
+      });
       
       // Start server for health checks
       app.listen(port, () => {

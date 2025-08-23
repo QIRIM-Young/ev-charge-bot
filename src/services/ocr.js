@@ -268,77 +268,209 @@ export async function processImageOCR(imageBuffer, options = {}) {
   }
 }
 
-// Extract meter reading from OCR text with context validation
+// Extract meter reading from OCR text with enhanced context validation
 function extractMeterReading(text, context = {}) {
+  logger.info(`Extracting reading from text: "${text}" with context:`, context);
+  
   // Enhanced patterns for different display types
   const patterns = [
-    // Standard meter format: 12345.67 or 12345,67 (white on black)
-    /(\d{4,6}[.,]\d{1,2})/g,
-    // Screen display format: small numbers like 6.07, 9.45 (white on blue)
-    /(\d{1,2}[.,]\d{1,2})/g,
-    // Large integers without decimals: 123456
-    /(\d{5,6})/g,
-    // With spaces: 12 345.67 or 12 345,67  
-    /(\d{2,3}\s\d{3}[.,]\d{1,2})/g,
-    // Alternative: 12345 67
-    /(\d{4,6}\s\d{1,2})/g,
-    // Very precise decimals: 1234.567
-    /(\d{4,6}[.,]\d{1,3})/g
+    {
+      name: 'separated_digits_7',
+      regex: /\b(\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d)(?=\s*(?:KW\.?h|kw\.?h|кВт\.?год|$))/gi,
+      handler: (match) => {
+        const joined = match.replace(/\s+/g, '');
+        // For meter readings like "0 0 5 0 7 7 3" -> "005077.3"
+        if (joined.length === 7) return joined.substring(0, 6) + '.' + joined.substring(6);
+        return joined;
+      },
+      priority: 98 // Highest priority for 7-digit separated format
+    },
+    {
+      name: 'separated_digits_6',
+      regex: /\b(\d\s+\d\s+\d\s+\d\s+\d\s+\d)(?=\s*(?:KW\.?h|kw\.?h|кВт\.?год|$))/gi,
+      handler: (match) => {
+        const joined = match.replace(/\s+/g, '');
+        // For meter readings like "0 0 5 0 8 5" -> "005085.0" (assume .0 if no decimal)
+        if (joined.length === 6) return joined + '.0';
+        return joined;
+      },
+      priority: 95 // Very high priority for 6-digit separated format
+    },
+    {
+      name: 'screen_kwh',
+      regex: /(\d+\.\s*\d+)\s*kwh/gi,
+      handler: (match) => match.replace(/\.\s+/, '.').replace(/kwh/gi, '').trim(),
+      priority: 95 // Very high priority for screen readings with kWh
+    },
+    {
+      name: 'meter_with_kwh',
+      regex: /(\d{5,6})(?:[^\d]*kw\.?h)/gi,
+      handler: (match) => {
+        const num = match.match(/\d{5,6}/)[0];
+        // Add decimal if missing for meter readings
+        return num.length === 6 ? num.substring(0, 5) + '.' + num.substring(5) : num + '.0';
+      },
+      priority: 85 // High priority for meter readings with kWh context
+    },
+    {
+      name: 'meter_split_decimal',
+      regex: /\b(\d{5})\s*(?:--|—|\.|\s)\s*(\d)\s*(?:--|—|\s)\s*(\w)/gi,
+      handler: (match) => {
+        // Look for pattern like "00508 5 - W" or "00508 5 W"
+        const parts = match.match(/(\d{5})\s*(?:--|—|\.|\s)\s*(\d)/);
+        if (parts && parts[1] && parts[2]) {
+          return parts[1] + '.' + parts[2];
+        }
+        return match;
+      },
+      priority: 97 // Very high priority for split decimal format
+    },
+    {
+      name: 'meter_6digits_with_nearby',
+      regex: /\b(\d{6})\s*(?:--|—|\.)\s*(\d)/gi,
+      handler: (match) => {
+        const parts = match.match(/(\d{6})\s*(?:--|—|\.)\s*(\d)/);
+        if (parts && parts[1] && parts[2]) {
+          return parts[1].substring(0, 5) + '.' + parts[2];
+        }
+        return match;
+      },
+      priority: 95 // Very high priority for 6-digit with nearby decimal
+    },
+    {
+      name: 'meter_6digits_exact',
+      regex: /\b(\d{6})(?=\s*(?:--|—|KW\.?h|kw\.?h|Wh|wh|кВт\.?год))/gi,
+      handler: (match) => {
+        // For 6-digit meter readings like "005085" -> "005085.0"
+        if (match.length === 6) return match.substring(0, 5) + '.' + match.substring(5);
+        return match + '.0';
+      },
+      priority: 90 // High priority for exact 6-digit meter format
+    },
+    {
+      name: 'meter_with_nearby_decimal',
+      regex: /\b(\d{6})\s*(?:--|—|\s+)\s*(\d)\b/gi,
+      handler: (match) => {
+        // Handle cases like "005085 -- 1" or "005085 1" where decimal digit is separated
+        const parts = match.match(/(\d{6})\s*(?:--|—|\s+)\s*(\d)/);
+        if (parts && parts[1] && parts[2]) {
+          // Convert to proper decimal format: "005085" + "1" -> "005085.1"
+          return parts[1].substring(0, 5) + '.' + parts[2];
+        }
+        return match;
+      },
+      priority: 96 // Very high priority for this specific meter format issue
+    },
+    {
+      name: 'standard_meter',
+      regex: /(\d{5,6}(?:[.,]\d{1,2})?)/g,
+      handler: (match) => match.replace(',', '.'),
+      priority: 70 // Medium priority for standard format
+    },
+    {
+      name: 'screen_decimal', 
+      regex: /(\d{1,2}[.,]\d{1,2})/g,
+      handler: (match) => match.replace(',', '.'),
+      priority: 60 // Lower priority, many false positives
+    }
   ];
   
   let bestMatch = null;
   let bestConfidence = 0;
+  let bestMethod = '';
   
   for (const pattern of patterns) {
-    const matches = text.match(pattern);
+    const matches = text.match(pattern.regex);
     if (matches) {
+      logger.info(`Pattern '${pattern.name}' found matches:`, matches);
+      
       for (const match of matches) {
-        // Clean and normalize the reading
-        const cleanMatch = match.replace(/\s/g, '').replace(',', '.');
-        const numValue = parseFloat(cleanMatch);
-        
-        // Enhanced validation for different types of displays with context
-        let isValid = false;
-        let contextBonus = 0;
-        
-        // Context-aware validation
-        if (context.previousReading) {
-          const prevReading = parseFloat(context.previousReading);
-          const diff = Math.abs(numValue - prevReading);
+        try {
+          const processed = pattern.handler(match);
+          const numValue = parseFloat(processed);
           
-          // For meter readings, expect reasonable progression (0-50 kWh per session)
-          if (numValue >= 1000 && numValue <= 999999) {
-            if (diff >= 0 && diff <= 50) {
+          if (isNaN(numValue)) continue;
+          
+          // Enhanced validation with context awareness
+          let isValid = false;
+          let confidence = pattern.priority;
+          
+          // Determine if this looks like a meter reading or screen reading
+          const isMeterReading = numValue >= 1000 && numValue <= 999999;
+          const isScreenReading = numValue >= 0.1 && numValue <= 50;
+          
+          // Context-based validation
+          if (context.expectedType === 'ДО' || context.expectedType === 'ПІСЛЯ') {
+            if (isMeterReading) {
               isValid = true;
-              contextBonus = 30; // Strong context match
-            } else if (diff <= 100) {
+              confidence += 20;
+            }
+          } else if (context.expectedType === 'ЕКРАН') {
+            if (isScreenReading) {
               isValid = true;
-              contextBonus = 10; // Possible but less likely
+              confidence += 25;
+            }
+          } else {
+            // No context - accept both types but with lower confidence
+            if (isMeterReading || isScreenReading) {
+              isValid = true;
             }
           }
-        } else {
-          // Fallback to original validation when no context
-          if (numValue >= 1000 && numValue <= 999999) {
-            // Large numbers: meter readings
-            isValid = true;
-          } else if (numValue >= 0.1 && numValue <= 50) {
-            // Small numbers: screen readings (kWh consumed)
-            isValid = true;
+          
+          // Pattern-specific bonuses
+          if (pattern.name === 'separated_digits' && isMeterReading) confidence += 15;
+          if (pattern.name.includes('kwh') && isScreenReading) confidence += 20;
+          if (match.toLowerCase().includes('kwh')) confidence += 10;
+          
+          // Previous reading context bonus
+          if (context.previousReading && isMeterReading) {
+            const diff = Math.abs(numValue - parseFloat(context.previousReading));
+            if (diff <= 50) confidence += 25; // Reasonable progression
           }
-        }
-        
-        if (isValid) {
-          const confidence = calculateReadingConfidence(match, text, numValue) + contextBonus;
-          if (confidence > bestConfidence) {
+          
+          logger.info(`  Match: "${match}" -> "${processed}" -> ${numValue} (valid: ${isValid}, confidence: ${confidence})`);
+          
+          if (isValid && confidence > bestConfidence) {
             bestMatch = numValue >= 100 ? numValue.toFixed(1) : numValue.toFixed(2);
             bestConfidence = confidence;
+            bestMethod = pattern.name;
           }
+        } catch (error) {
+          logger.warn(`Error processing match "${match}": ${error.message}`);
         }
       }
     }
   }
   
-  logger.info(`Best reading extracted: ${bestMatch} (confidence: ${bestConfidence})`);
+  logger.info(`Best reading extracted: ${bestMatch} (confidence: ${bestConfidence}, method: ${bestMethod})`);
+  
+  // Post-processing: context-based decimal correction
+  if (context && context.previousReading && bestMatch) {
+    const previousValue = parseFloat(context.previousReading);
+    const currentValue = parseFloat(bestMatch);
+    
+    if (!isNaN(previousValue) && !isNaN(currentValue)) {
+      const difference = currentValue - previousValue;
+      
+      // Special case: if we have a whole number reading that should likely have a decimal
+      // and the difference suggests a missing decimal digit
+      if (bestMatch.toString().endsWith('.0')) {
+        // Try adding 0.1 to see if it makes more sense
+        const correctedValue = currentValue + 0.1;
+        const correctedDifference = correctedValue - previousValue;
+        
+        // Check if the corrected difference is more reasonable (0.1-50 kWh range)
+        if (correctedDifference >= 0.1 && correctedDifference <= 50 && 
+            correctedDifference > difference && 
+            bestMethod === 'standard_meter') {  // Only apply to standard_meter patterns that might miss decimals
+          logger.info(`Context-based decimal correction applied: ${currentValue} -> ${correctedValue} (diff: ${difference.toFixed(1)} -> ${correctedDifference.toFixed(1)})`);
+          bestMatch = correctedValue.toFixed(1);
+          bestMethod += '_context_corrected';
+        }
+      }
+    }
+  }
+  
   return bestMatch;
 }
 
